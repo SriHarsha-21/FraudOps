@@ -1,0 +1,19 @@
+{
+  "seed": 42,
+  "alpha": 0.1,
+  "split": {"train_frac": 0.7, "calib_frac": 0.15},
+  "detector": {
+    "learning_rate": 0.1,
+    "max_iter": 200,
+    "max_leaf_nodes": 31,
+    "min_samples_leaf": 50,
+    "l2": 1.0,
+    "fraud_weight": 1.0
+  },
+  "costs": {"review": 5.0, "false_block": 25.0},
+  "reviewer": {"error_rate": 0.05},
+  "backtest": {"agent_cap": 3000},
+  "tools": {"velocity_full_at": 5, "geo_full_at_km": 100, "history_full_at_ratio": 10},
+  "agent": {"max_steps": 6, "recursion_limit": 30, "block_at": 0.7, "approve_at": 0.2},
+  "label_delay_days": 14
+}

@@ -1,0 +1,16 @@
+# Data and secrets never go in the repository
+*.csv
+*.parquet
+data/
+.env
+kaggle.json
+*.key
+
+# Python and tooling
+__pycache__/
+.pytest_cache/
+*.egg-info/
+.venv/
+
+# Run outputs
+results/
