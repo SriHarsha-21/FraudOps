@@ -32,6 +32,12 @@ The data is simulated, so results describe this benchmark and not real-world fra
 
 Results are written to results/stage1_metrics.json.
 
+    python scripts/run_backtest.py --train fraudTrain.csv --max-cards 200
+    python scripts/run_sweep.py --train fraudTrain.csv --max-cards 200
+
+The sweep picks the conformal alpha on the calibration split only and prints test cost
+for several review prices, so the cost of escalation can be read honestly.
+
 ## What stage 1 does
 
 1. Validates the schema, cleans the data, drops identity fields and sanitizes text.

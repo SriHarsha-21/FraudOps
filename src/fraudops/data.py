@@ -44,13 +44,21 @@ def looks_like_injection(value):
     return bool(_INJECTION_WORDS.search(str(value)))
 
 
+def _parse_dates(series, fmt):
+    """Parse with a pinned format, falling back to inference if the format differs."""
+    try:
+        return pd.to_datetime(series, format=fmt)
+    except (ValueError, TypeError):
+        return pd.to_datetime(series)
+
+
 def clean(df):
     """Validate, parse, sanitize and sort a raw transaction frame."""
     validate_schema(df)
     out = df.drop(columns=[c for c in DROP_COLUMNS if c in df.columns]).copy()
-    out["ts"] = pd.to_datetime(out["trans_date_trans_time"])
+    out["ts"] = _parse_dates(out["trans_date_trans_time"], "%Y-%m-%d %H:%M:%S")
     out = out.drop(columns=["trans_date_trans_time"])
-    out["dob"] = pd.to_datetime(out["dob"])
+    out["dob"] = _parse_dates(out["dob"], "%Y-%m-%d")
     out["cc_num"] = out["cc_num"].astype(str)
     out["merchant"] = out["merchant"].astype(str).str.replace(r"^fraud_", "", regex=True)
     flag = pd.Series(False, index=out.index)

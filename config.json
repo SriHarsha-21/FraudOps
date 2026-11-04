@@ -13,6 +13,8 @@
   "costs": {"review": 5.0, "false_block": 25.0},
   "reviewer": {"error_rate": 0.05},
   "backtest": {"agent_cap": 3000},
+  "sweep": {"alphas": [0.02, 0.05, 0.1, 0.15, 0.2],
+            "review_prices": [0.25, 0.5, 1.0, 2.0, 5.0, 10.0]},
   "tools": {"velocity_full_at": 5, "geo_full_at_km": 100, "history_full_at_ratio": 10},
   "agent": {"max_steps": 6, "recursion_limit": 30, "block_at": 0.7, "approve_at": 0.2},
   "label_delay_days": 14

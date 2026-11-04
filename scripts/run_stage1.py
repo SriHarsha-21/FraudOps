@@ -41,6 +41,13 @@ def main():
 
     train_df = clean(raw_train)
     test_df = clean(raw_test) if raw_test is not None else None
+    # Describe the whole file before any card sampling, so the sample can be judged.
+    full_file = {
+        "rows": int(len(train_df)),
+        "cards": int(train_df["cc_num"].nunique()),
+        "fraud_rate": float(train_df["is_fraud"].mean()),
+        "date_range": [str(train_df["ts"].min()), str(train_df["ts"].max())],
+    }
     if args.max_cards:
         cards = np.random.default_rng(cfg["seed"]).permutation(
             train_df["cc_num"].unique())[:args.max_cards]
@@ -54,6 +61,7 @@ def main():
     conf = pipe["conformal"]
     actions = conf.actions(p[te])
     result = {
+        "full_file": full_file,
         "rows": {k: int(v.sum()) for k, v in m.items()},
         "fraud_rate": {k: float(y[v].mean()) for k, v in m.items()},
         "temperature": pipe["temperature"],
