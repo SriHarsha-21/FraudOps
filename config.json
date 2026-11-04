@@ -18,7 +18,11 @@
   "red_team": {"shave_k": 1.5, "shave_gap_min": 5, "split_n": 3, "split_gap_min": 75,
                "spread_gap_hours": 3, "local_sigma_deg": 0.02,
                "train_margin_hours": 48, "promote_cost_tol": 0.0,
-               "promote_coverage_margin": 0.05},
+               "promote_coverage_margin": 0.05,
+               "holdout_attacks": ["amount_shaving", "splitting", "category_swap"],
+               "shifted": {"shave_k": 1.0, "shave_gap_min": 15, "split_n": 5,
+                           "split_gap_min": 120, "spread_gap_hours": 6,
+                           "local_sigma_deg": 0.05}},
   "tools": {"velocity_full_at": 5, "geo_full_at_km": 100, "history_full_at_ratio": 10},
   "agent": {"max_steps": 6, "recursion_limit": 30, "block_at": 0.7, "approve_at": 0.2},
   "label_delay_days": 14

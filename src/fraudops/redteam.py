@@ -200,17 +200,21 @@ def attacked(pipe, attack, ctx, cfg, seed, thr):
     return evaluate_world(fm, score_world(pipe, fm), pipe["conformal"], thr, cfg)
 
 
-def build_challenger(pipe, ctx, cfg, seed):
-    """Retrain on a training period where some fraud has been mutated by each attack."""
+def build_challenger(pipe, ctx, cfg, seed, attacks=None):
+    """Retrain on a training period where some fraud has been mutated.
+
+    attacks lists the attack types the blue team gets to see. The default is all five.
+    """
+    attacks = list(ATTACKS if attacks is None else attacks)
     fr = pipe["frame"]
     rt = cfg["red_team"]
     train_max = fr.loc[fr["part_orig"] == "train", "ts"].max()
     cutoff = train_max - pd.Timedelta(hours=rt["train_margin_hours"])
     elig = fr.index[(fr["part_orig"] == "train") & (fr["is_fraud"] == 1) & (fr["ts"] <= cutoff)]
     rng = np.random.default_rng(seed + 1)
-    pick = rng.integers(0, len(ATTACKS) + 1, size=len(elig))
-    chosen = pick < len(ATTACKS)
-    assign = pd.Series([ATTACKS[k] for k in pick[chosen]], index=elig[chosen], dtype=object)
+    pick = rng.integers(0, len(attacks) + 1, size=len(elig))
+    chosen = pick < len(attacks)
+    assign = pd.Series([attacks[k] for k in pick[chosen]], index=elig[chosen], dtype=object)
     fr2 = mutate_cases(fr, assign, ctx, seed + 2)
 
     cats = pipe["categories"]
@@ -226,7 +230,8 @@ def build_challenger(pipe, ctx, cfg, seed):
         p[masks["calibration"]], y[masks["calibration"]])
     return {"frame": fr2, "p": p, "y": y, "masks": masks, "detector": det,
             "temperature": temp, "conformal": gate, "categories": cats,
-            "mutated_training_cases": int(len(assign))}
+            "mutated_training_cases": int(len(assign)),
+            "training_attacks": sorted(set(assign))}
 
 
 def promotion_decision(champion_clean, challenger_clean, cfg):
@@ -264,3 +269,53 @@ def run_red_team(pipe, cfg, seed=0):
         "champion": champion, "challenger": challenger,
         "promotion": promotion_decision(champion["clean"], challenger["clean"], cfg),
     }
+
+
+def _recovered_share(clean_recall, champion_recall, challenger_recall, floor=0.02):
+    """Share of the champion's recall loss that the challenger wins back.
+
+    None when the attack barely hurt the champion, because the ratio is then noise.
+    """
+    loss = clean_recall - champion_recall
+    if loss < floor:
+        return None
+    return float((challenger_recall - champion_recall) / loss)
+
+
+def run_generalization(pipe, cfg, seed=0):
+    """Does the blue retrain survive attacks it has not seen?
+
+    Two tests. Shifted parameters: the standard challenger faces every attack with
+    different settings (tighter cap, more pieces, longer gaps). Held-out attack: a
+    challenger is retrained without one attack type and then faces that attack.
+    """
+    rt = cfg["red_team"]
+    champ = with_parts(pipe)
+    ctx = make_context(champ, cfg)
+    thr_c = best_threshold(champ, cfg)
+    clean = evaluate_world(champ["frame"], champ["p"], champ["conformal"], thr_c, cfg)
+    shifted_ctx = dict(ctx, cfg={**rt, **rt["shifted"]})
+    full = build_challenger(champ, ctx, cfg, seed)
+    thr_f = best_threshold(full, cfg)
+
+    def row(test, attack, champ_res, chall_res):
+        cm, hm = champ_res["model_only"], chall_res["model_only"]
+        return {
+            "test": test, "attack": attack, "champion": champ_res, "challenger": chall_res,
+            "model_recall_recovered_share": _recovered_share(
+                clean["model_only"]["value_recall"], cm["value_recall"], hm["value_recall"]),
+        }
+
+    rows = []
+    for i, a in enumerate(ATTACKS):
+        rows.append(row("shifted_parameters", a,
+                        attacked(champ, a, shifted_ctx, cfg, seed + 50 + i, thr_c),
+                        attacked(full, a, shifted_ctx, cfg, seed + 50 + i, thr_f)))
+    for i, a in enumerate(rt["holdout_attacks"]):
+        ch = build_challenger(champ, ctx, cfg, seed, attacks=[x for x in ATTACKS if x != a])
+        assert a not in ch["training_attacks"]
+        rows.append(row("held_out_attack", a,
+                        attacked(champ, a, ctx, cfg, seed + 80 + i, thr_c),
+                        attacked(ch, a, ctx, cfg, seed + 80 + i, best_threshold(ch, cfg))))
+    return {"champion_clean_model_recall": clean["model_only"]["value_recall"],
+            "shifted_settings": rt["shifted"], "rows": rows}

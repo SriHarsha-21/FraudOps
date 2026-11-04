@@ -125,3 +125,31 @@ def test_run_red_team_output_shape():
             assert r["model_plus_gate"]["silent_miss_rate"] <= 1.0
     assert isinstance(res["promotion"]["promote"], bool)
     assert len(ATTACKS) == 5
+
+
+def test_held_out_attack_never_appears_in_training():
+    pipe = fit_pipeline(clean(make_fixture(seed=9)), None, CFG)
+    champ = with_parts(pipe)
+    ctx = make_context(champ, CFG)
+    others = [a for a in ATTACKS if a != "splitting"]
+    ch = __import__("fraudops.redteam", fromlist=["build_challenger"]).build_challenger(
+        champ, ctx, CFG, seed=3, attacks=others)
+    assert "splitting" not in ch["training_attacks"]
+    assert set(ch["training_attacks"]) <= set(others)
+
+
+def test_recovered_share_arithmetic_and_noise_floor():
+    from fraudops.redteam import _recovered_share
+    assert _recovered_share(0.98, 0.50, 0.89) == pytest.approx(0.8125)
+    assert _recovered_share(0.98, 0.97, 0.99) is None
+
+
+def test_run_generalization_output_shape():
+    from fraudops.redteam import run_generalization
+    pipe = fit_pipeline(clean(make_fixture(seed=10)), None, CFG)
+    res = run_generalization(pipe, CFG, seed=1)
+    tests = [r["test"] for r in res["rows"]]
+    assert tests.count("shifted_parameters") == len(ATTACKS)
+    assert tests.count("held_out_attack") == len(CFG["red_team"]["holdout_attacks"])
+    for r in res["rows"]:
+        assert 0.0 <= r["challenger"]["model_only"]["value_recall"] <= 1.0

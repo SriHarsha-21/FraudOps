@@ -40,7 +40,9 @@ Results are written to results/stage1_metrics.json.
 
 The red team rewrites test-period fraud so each case looks more normal while the total
 value taken stays the same, then measures how much recall each system loses. The rules
-are in src/fraudops/redteam.py. Robustness is measured against this attacker only.
+are in src/fraudops/redteam.py. Robustness is measured against this attacker only. scripts/run_generalization.py checks
+the blue retrain against attacks it has not seen: the same attacks with different settings,
+and each attack held out of the retraining data.
 
 The sweep picks the conformal alpha on the calibration split only and prints test cost
 for several review prices, so the cost of escalation can be read honestly.
