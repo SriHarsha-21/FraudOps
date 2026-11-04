@@ -17,6 +17,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
 from fraudops.agents.llm import make_explainer, make_ollama_planner, ollama_chat  # noqa: E402
+from fraudops.agents.verifier import make_llm_verifier  # noqa: E402
 from fraudops.pipeline import fit_pipeline, load_frames  # noqa: E402
 from fraudops.review import ReviewService, check_pin  # noqa: E402
 
@@ -29,7 +30,7 @@ def load_service(csv_path, max_cards, workdir, use_llm=False, model=""):
         cfg = json.load(fh)
     train_df, test_df = load_frames(csv_path or None, None, int(max_cards), cfg["seed"])
     pipe = fit_pipeline(train_df, test_df, cfg)
-    planner = explainer = None
+    planner = explainer = verifier = None
     if use_llm:
         llm = cfg["llm"]
         name = model or llm["model"]
@@ -38,8 +39,9 @@ def load_service(csv_path, max_cards, workdir, use_llm=False, model=""):
             return ollama_chat(prompt, name, llm["host"], llm["timeout_s"])
 
         planner, explainer = make_ollama_planner(chat), make_explainer(chat)
+        verifier = make_llm_verifier(chat)
     return ReviewService(pipe, cfg, workdir=workdir or None, planner=planner,
-                         explainer=explainer)
+                         explainer=explainer, verifier=verifier)
 
 
 with st.sidebar:
@@ -110,6 +112,12 @@ with tab_queue:
                 st.write(summary["text"])
                 st.caption("Written by %s. It never sets a verdict." % (
                     "the local model" if summary["source"] == "llm" else "a fixed template"))
+            ver = opened["payload"].get("verification")
+            if ver:
+                if ver["flags"]:
+                    st.warning("Verifier flags: " + "; ".join(ver["flags"]))
+                else:
+                    st.success("Verifier: the evidence supports the suggestion.")
             st.markdown("**Why this case needs a person**")
             for reason in opened["payload"]["reasons"] or ["No reason recorded."]:
                 st.write("- " + reason)
@@ -162,6 +170,16 @@ with tab_summary:
     m2.metric("By a human", s["by_human"])
     m3.metric("Still in queue", s["remaining_in_queue"])
     m4.metric("Chain intact", "yes" if s["chain_ok"] else "NO")
+    mon = svc.monitor_report()
+    st.markdown("**Drift monitor**")
+    if mon["alarm_at"] is None:
+        st.success("No alarm over %d test cases. False alarm bound %.1f%% if the data is "
+                   "exchangeable." % (mon["cases"], 100 * mon["false_alarm_bound"]))
+    else:
+        st.warning("Alarm at test case %d (%s tail). Under cautious mode %d automatic "
+                   "approvals after it would go to a person. Real streams drift, so treat this "
+                   "as a prompt to look, not proof of an attack."
+                   % (mon["alarm_at"], mon["side"], mon["auto_approvals_after_alarm"]))
     if s["agent_agreement"] is not None:
         st.write("Where the agent made a recommendation, the human agreed in %.0f%% of %d "
                  "cases." % (100 * s["agent_agreement"], s["agent_comparable"]))

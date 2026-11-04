@@ -17,6 +17,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from .planner import rule_planner, validate_choice
+from .verifier import rule_verifier
 from .tools import make_tools
 
 GRAPH_VERSION = "1"
@@ -33,6 +34,7 @@ class State(TypedDict, total=False):
     tool_error: bool
     recommendation: str
     reasons: list
+    verification: dict
     verdict: str
     decided_by: str
     reviewer: str
@@ -48,7 +50,7 @@ def make_checkpointer(path=":memory:"):
     return SqliteSaver(sqlite3.connect(path, check_same_thread=False))
 
 
-def build_graph(ctx, store, checkpointer=None, planner=rule_planner):
+def build_graph(ctx, store, checkpointer=None, planner=rule_planner, verifier=rule_verifier):
     cfg = ctx.cfg
     agent_cfg = cfg["agent"]
     tools = make_tools(ctx)
@@ -129,11 +131,24 @@ def build_graph(ctx, store, checkpointer=None, planner=rule_planner):
         return {"recommendation": rec, "reasons": reasons,
                 "trace": state["trace"] + [event]}
 
+    def verify(state):
+        try:
+            flags = [str(f)[:80] for f in verifier(state)][:5]
+        except Exception:
+            flags = ["verifier failed"]
+        ver = {"status": "flagged" if flags else "supported", "flags": flags,
+               "verifier": getattr(verifier, "__name__", "verifier")}
+        event = {"event": "verify", "status": ver["status"], "flags": len(flags)}
+        return {"verification": ver,
+                "reasons": state["reasons"] + ["verifier: " + f for f in flags],
+                "trace": state["trace"] + [event]}
+
     def human_review(state):
         answer = interrupt({
             "txn_id": state["txn_id"], "p_fraud": state["p_fraud"],
             "gate_action": state["gate_action"], "evidence": state["evidence"],
-            "recommendation": state["recommendation"], "reasons": state["reasons"]})
+            "recommendation": state["recommendation"], "reasons": state["reasons"],
+            "verification": state.get("verification")})
         decision = answer.get("decision") if isinstance(answer, dict) else None
         if decision not in ("approve", "block"):
             raise ValueError("decision must be 'approve' or 'block'")
@@ -149,10 +164,12 @@ def build_graph(ctx, store, checkpointer=None, planner=rule_planner):
             "case_id": state["txn_id"], "txn_id": state["txn_id"],
             "versions": {"config_hash": cfg_hash, "graph": GRAPH_VERSION,
                          "planner": getattr(planner, "__name__", "planner"),
+                         "verifier": getattr(verifier, "__name__", "verifier"),
                          "alpha": cfg["alpha"], "trust_level": ctx.trust_level},
             "p_fraud": state["p_fraud"], "gate_action": state["gate_action"],
             "evidence": state["evidence"], "recommendation": state.get("recommendation"),
             "reasons": state["reasons"], "trace": state["trace"],
+            "verification": state.get("verification"),
             "verdict": verdict, "decided_by": decided_by,
             "reviewer": state.get("reviewer"),
         }
@@ -163,14 +180,15 @@ def build_graph(ctx, store, checkpointer=None, planner=rule_planner):
 
     g = StateGraph(State)
     for name, fn in [("score", score), ("plan", plan), ("act", act),
-                     ("recommend", recommend), ("human_review", human_review),
+                     ("recommend", recommend), ("verify", verify), ("human_review", human_review),
                      ("finalize", finalize)]:
         g.add_node(name, fn)
     g.add_edge(START, "score")
     g.add_conditional_edges("score", route_gate, ["plan", "finalize"])
     g.add_conditional_edges("plan", route_plan, ["act", "recommend"])
     g.add_edge("act", "plan")
-    g.add_edge("recommend", "human_review")
+    g.add_edge("recommend", "verify")
+    g.add_edge("verify", "human_review")
     g.add_edge("human_review", "finalize")
     g.add_edge("finalize", END)
     return g.compile(checkpointer=checkpointer or make_checkpointer())

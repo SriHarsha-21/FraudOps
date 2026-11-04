@@ -13,6 +13,8 @@ import numpy as np
 from .agents.graph import build_graph, make_checkpointer, resume_case, start_case
 from .agents.llm import make_explainer
 from .agents.planner import rule_planner
+from .agents.verifier import rule_verifier
+from .monitor import ScoreMonitor
 from .agents.store import DecisionStore
 from .agents.tools import CaseContext
 from .backtest import _oracle
@@ -27,10 +29,12 @@ def check_pin(supplied):
 
 
 class ReviewService:
-    def __init__(self, pipe, cfg, workdir=None, planner=None, explainer=None):
+    def __init__(self, pipe, cfg, workdir=None, planner=None, explainer=None,
+                 verifier=None):
         self.pipe, self.cfg = pipe, cfg
         self.explainer = explainer or make_explainer(None)
         self._explained = {}
+        self._monitor = None
         self.ctx = CaseContext(pipe, cfg)
         if workdir:
             os.makedirs(workdir, exist_ok=True)
@@ -40,7 +44,8 @@ class ReviewService:
             db_path = ck_path = ":memory:"
         self.store = DecisionStore(db_path)
         self.app = build_graph(self.ctx, self.store, make_checkpointer(ck_path),
-                               planner=planner or rule_planner)
+                               planner=planner or rule_planner,
+                               verifier=verifier or rule_verifier)
 
     def _cfg(self, txn_id):
         return {"configurable": {"thread_id": txn_id}}
@@ -70,6 +75,24 @@ class ReviewService:
             "card_ref": hashlib.sha256(str(r["cc_num"]).encode("utf-8")).hexdigest()[:6],
             "text_flag": bool(r["text_flag"]),
         }
+
+    def monitor_report(self):
+        """Run the drift monitor over the test stream once. Cached."""
+        if self._monitor is None:
+            masks = self.pipe["masks"]
+            mcfg = self.cfg["monitor"]
+            mon = ScoreMonitor(self.ctx.p[masks["calibration"]], mcfg["threshold"],
+                               mcfg["seed"])
+            rows = np.flatnonzero(masks["test"])
+            mon.run(self.ctx.p[rows])
+            rep = mon.report()
+            after = 0
+            if rep["alarm_at"] is not None:
+                after = int(sum(self.ctx.gate_actions[i] == "approve"
+                                for i in rows[rep["alarm_at"]:]))
+            rep["auto_approvals_after_alarm"] = after
+            self._monitor = rep
+        return self._monitor
 
     def explain(self, txn_id):
         """Short text for the reviewer. Cached per case. Never changes a verdict."""
