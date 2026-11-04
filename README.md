@@ -6,7 +6,8 @@ Team: Conformal Sentinels.
 Status: stage 1 (data, detector, conformal escalation), stage 2 (agent workflow with
 human review and a tamper-evident decision store) and stage 3 (backtest) are implemented
 and tested on a synthetic fixture. Real-data results are pending the first Colab run.
-The review app and the red team are planned.
+Stage 4 (a rule-based red team, a blue retrain and a promotion rule) is implemented and
+tested on the fixture. The review app is planned.
 
 ## Originality and AI assistance
 
@@ -34,6 +35,12 @@ Results are written to results/stage1_metrics.json.
 
     python scripts/run_backtest.py --train fraudTrain.csv --max-cards 200
     python scripts/run_sweep.py --train fraudTrain.csv --max-cards 200
+
+    python scripts/run_redteam.py --train fraudTrain.csv --max-cards 200
+
+The red team rewrites test-period fraud so each case looks more normal while the total
+value taken stays the same, then measures how much recall each system loses. The rules
+are in src/fraudops/redteam.py. Robustness is measured against this attacker only.
 
 The sweep picks the conformal alpha on the calibration split only and prints test cost
 for several review prices, so the cost of escalation can be read honestly.
