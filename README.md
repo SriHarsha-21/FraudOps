@@ -109,6 +109,13 @@ review_state/). Set FRAUDOPS_REVIEW_PIN to require a shared PIN. The reviewer na
 label, not an identity check. The card number is never shown, only a short hash reference.
 A demo button simulates a reviewer. Agreement figures from it say nothing about real analysts.
 
+## Docker
+
+    docker build -t fraudops .
+    docker run -p 8501:8501 -e FRAUDOPS_REVIEW_PIN=1234 fraudops
+
+Continuous integration runs the test suite on every push (.github/workflows/ci.yml).
+
 ## Layout
 
     src/fraudops/          data, features, detector, conformal, pipeline, backtest, sweep, redteam, review

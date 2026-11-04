@@ -1,0 +1,7 @@
+.git
+review_state/
+results/
+__pycache__/
+*.pyc
+*.csv
+*.bundle
