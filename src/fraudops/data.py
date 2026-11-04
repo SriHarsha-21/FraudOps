@@ -44,21 +44,38 @@ def looks_like_injection(value):
     return bool(_INJECTION_WORDS.search(str(value)))
 
 
-def _parse_dates(series, fmt):
-    """Parse with a pinned format, falling back to inference if the format differs."""
-    try:
-        return pd.to_datetime(series, format=fmt)
-    except (ValueError, TypeError):
-        return pd.to_datetime(series)
+# Kaggle files use ISO dates. The Hugging Face mirror was saved through a spreadsheet
+# and uses month-first dates with two-digit years, for example 1/19/62 0:00.
+TS_FORMATS = ["%Y-%m-%d %H:%M:%S", "%m/%d/%y %H:%M", "%m/%d/%Y %H:%M"]
+DOB_FORMATS = ["%Y-%m-%d", "%m/%d/%y", "%m/%d/%Y"]
+
+
+def _parse_dates(series, formats, name):
+    """Try each known format on the whole column. Raise instead of guessing."""
+    for fmt in formats:
+        try:
+            return pd.to_datetime(series, format=fmt)
+        except (ValueError, TypeError):
+            continue
+    raise ValueError("%s matches none of the known date formats: %s"
+                     % (name, ", ".join(formats)))
 
 
 def clean(df):
     """Validate, parse, sanitize and sort a raw transaction frame."""
     validate_schema(df)
     out = df.drop(columns=[c for c in DROP_COLUMNS if c in df.columns]).copy()
-    out["ts"] = _parse_dates(out["trans_date_trans_time"], "%Y-%m-%d %H:%M:%S")
+    out["ts"] = _parse_dates(out["trans_date_trans_time"], TS_FORMATS, "trans_date_trans_time")
     out = out.drop(columns=["trans_date_trans_time"])
-    out["dob"] = _parse_dates(out["dob"], "%Y-%m-%d")
+    dob = _parse_dates(out["dob"], DOB_FORMATS, "dob")
+    # A two-digit year maps 00-68 to the 2000s, so a 1952 birth reads as 2052. A birth
+    # after the transaction is impossible, so move such dates back one century.
+    dob = dob.mask(dob > out["ts"], dob - pd.DateOffset(years=100))
+    age_years = (out["ts"] - dob).dt.days / 365.25
+    if len(out) and (age_years.min() < 10 or age_years.max() > 120):
+        raise ValueError("implausible customer ages after parsing dob: %.1f to %.1f"
+                         % (age_years.min(), age_years.max()))
+    out["dob"] = dob
     out["cc_num"] = out["cc_num"].astype(str)
     out["merchant"] = out["merchant"].astype(str).str.replace(r"^fraud_", "", regex=True)
     flag = pd.Series(False, index=out.index)
