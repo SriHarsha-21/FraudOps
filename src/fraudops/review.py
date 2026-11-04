@@ -11,6 +11,8 @@ import os
 import numpy as np
 
 from .agents.graph import build_graph, make_checkpointer, resume_case, start_case
+from .agents.llm import make_explainer
+from .agents.planner import rule_planner
 from .agents.store import DecisionStore
 from .agents.tools import CaseContext
 from .backtest import _oracle
@@ -25,8 +27,10 @@ def check_pin(supplied):
 
 
 class ReviewService:
-    def __init__(self, pipe, cfg, workdir=None):
+    def __init__(self, pipe, cfg, workdir=None, planner=None, explainer=None):
         self.pipe, self.cfg = pipe, cfg
+        self.explainer = explainer or make_explainer(None)
+        self._explained = {}
         self.ctx = CaseContext(pipe, cfg)
         if workdir:
             os.makedirs(workdir, exist_ok=True)
@@ -35,7 +39,8 @@ class ReviewService:
         else:
             db_path = ck_path = ":memory:"
         self.store = DecisionStore(db_path)
-        self.app = build_graph(self.ctx, self.store, make_checkpointer(ck_path))
+        self.app = build_graph(self.ctx, self.store, make_checkpointer(ck_path),
+                               planner=planner or rule_planner)
 
     def _cfg(self, txn_id):
         return {"configurable": {"thread_id": txn_id}}
@@ -65,6 +70,15 @@ class ReviewService:
             "card_ref": hashlib.sha256(str(r["cc_num"]).encode("utf-8")).hexdigest()[:6],
             "text_flag": bool(r["text_flag"]),
         }
+
+    def explain(self, txn_id):
+        """Short text for the reviewer. Cached per case. Never changes a verdict."""
+        if txn_id not in self._explained:
+            payload = self.pending_payload(txn_id)
+            if payload is None:
+                return None
+            self._explained[txn_id] = self.explainer(payload)
+        return self._explained[txn_id]
 
     def pending_payload(self, txn_id):
         """The paused review payload for a case, or None if it is not waiting."""

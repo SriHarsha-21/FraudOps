@@ -16,6 +16,7 @@ import streamlit as st
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
+from fraudops.agents.llm import make_explainer, make_ollama_planner, ollama_chat  # noqa: E402
 from fraudops.pipeline import fit_pipeline, load_frames  # noqa: E402
 from fraudops.review import ReviewService, check_pin  # noqa: E402
 
@@ -23,12 +24,22 @@ st.set_page_config(page_title="FraudOps review", layout="wide")
 
 
 @st.cache_resource(show_spinner="Training the detector and building the queue...")
-def load_service(csv_path, max_cards, workdir):
+def load_service(csv_path, max_cards, workdir, use_llm=False, model=""):
     with open(os.path.join(HERE, "..", "config.json")) as fh:
         cfg = json.load(fh)
     train_df, test_df = load_frames(csv_path or None, None, int(max_cards), cfg["seed"])
     pipe = fit_pipeline(train_df, test_df, cfg)
-    return ReviewService(pipe, cfg, workdir=workdir or None)
+    planner = explainer = None
+    if use_llm:
+        llm = cfg["llm"]
+        name = model or llm["model"]
+
+        def chat(prompt):
+            return ollama_chat(prompt, name, llm["host"], llm["timeout_s"])
+
+        planner, explainer = make_ollama_planner(chat), make_explainer(chat)
+    return ReviewService(pipe, cfg, workdir=workdir or None, planner=planner,
+                         explainer=explainer)
 
 
 with st.sidebar:
@@ -36,6 +47,9 @@ with st.sidebar:
     reviewer = st.text_input("Reviewer name", key="reviewer")
     pin = st.text_input("PIN", type="password", key="pin") if os.environ.get(
         "FRAUDOPS_REVIEW_PIN") else ""
+    st.header("Local LLM")
+    use_llm = st.checkbox("Use Ollama for planning and summaries", key="use_llm")
+    llm_model = st.text_input("Model (blank = config default)", value="", key="llm_model")
     st.header("Data")
     csv_path = st.text_input("Path to fraudTrain.csv (blank = synthetic demo data)",
                              value="", key="csv_path")
@@ -50,7 +64,8 @@ if not check_pin(pin):
     st.warning("Enter the PIN in the sidebar to continue.")
     st.stop()
 
-svc = load_service(csv_path.strip(), max_cards, workdir.strip())
+svc = load_service(csv_path.strip(), max_cards, workdir.strip(), use_llm,
+                   llm_model.strip())
 if not csv_path.strip():
     st.info("Showing synthetic demo data. Results here say nothing about real fraud.")
 
@@ -89,6 +104,12 @@ with tab_queue:
             if d["text_flag"]:
                 st.warning("A text field looked like an instruction aimed at a model. "
                            "It was cleaned and never given to any model.")
+            summary = svc.explain(tid)
+            if summary:
+                st.markdown("**Summary**")
+                st.write(summary["text"])
+                st.caption("Written by %s. It never sets a verdict." % (
+                    "the local model" if summary["source"] == "llm" else "a fixed template"))
             st.markdown("**Why this case needs a person**")
             for reason in opened["payload"]["reasons"] or ["No reason recorded."]:
                 st.write("- " + reason)
