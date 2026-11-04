@@ -5,3 +5,4 @@ scipy
 langgraph
 langgraph-checkpoint-sqlite
 pytest
+streamlit

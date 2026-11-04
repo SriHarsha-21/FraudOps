@@ -7,7 +7,7 @@ Status: stage 1 (data, detector, conformal escalation), stage 2 (agent workflow 
 human review and a tamper-evident decision store) and stage 3 (backtest) are implemented
 and tested on a synthetic fixture. Real-data results are pending the first Colab run.
 Stage 4 (a rule-based red team, a blue retrain and a promotion rule) is implemented and
-tested on the fixture. The review app is planned.
+tested on the fixture. Stage 5 (a Streamlit review app for escalated cases) is implemented.
 
 ## Originality and AI assistance
 
@@ -97,12 +97,25 @@ scales (tools.*) and the decision thresholds (agent.block_at and agent.approve_a
 config.json are assumptions. They are starting values to be revisited after the first
 real-data baseline.
 
+## Review app
+
+    pip install streamlit
+    streamlit run app/streamlit_app.py
+
+The app lists escalated cases by amount times fraud probability. It shows the evidence the
+agent gathered and its recommendation. A reviewer approves or blocks; only that click puts
+a human verdict in the decision record. Pending cases survive a restart (state folder
+review_state/). Set FRAUDOPS_REVIEW_PIN to require a shared PIN. The reviewer name is a
+label, not an identity check. The card number is never shown, only a short hash reference.
+A demo button simulates a reviewer. Agreement figures from it say nothing about real analysts.
+
 ## Layout
 
-    src/fraudops/          data, features, detector, conformal, pipeline, backtest
+    src/fraudops/          data, features, detector, conformal, pipeline, backtest, sweep, redteam, review
+    app/                   streamlit_app.py (review front end)
     src/fraudops/agents/   tools, planner, store, LangGraph workflow
     scripts/               run_stage1.py, run_backtest.py
-    tests/                 stage 1, stage 2 and backtest tests
+    tests/                 stage 1 to 5 tests
     config.json     seeds, alpha, detector settings, cost assumptions
 
 ## Licence
