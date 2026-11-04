@@ -5,7 +5,7 @@ Team: Conformal Sentinels.
 
 Status: stage 1 (data, detector, conformal escalation), stage 2 (agent workflow with
 human review and a tamper-evident decision store) and stage 3 (backtest) are implemented
-and tested on a synthetic fixture. Real-data results are pending the first Colab run.
+and tested on a synthetic fixture. Real-data results are in the Results section below.
 Stage 4 (a rule-based red team, a blue retrain and a promotion rule) is implemented and
 tested on the fixture. Stage 5 (a Streamlit review app for escalated cases) is implemented.
 
@@ -124,6 +124,86 @@ Continuous integration runs the test suite on every push (.github/workflows/ci.y
     scripts/               run_stage1.py, run_backtest.py
     tests/                 stage 1 to 5 tests
     config.json     seeds, alpha, detector settings, cost assumptions
+
+## Agents
+
+- Investigation agent (LangGraph): score, plan, act (four evidence tools in a bounded loop), recommend, verify, human review, finalize. Only escalated cases enter the loop.
+- Planner: rule-based by default. An optional Llama planner (Ollama) sits behind the same interface. Code validates every planner answer and falls back to the rules when the model fails.
+- Explainer: writes a short summary for the reviewer from numbers and tool notes only. It never sets a verdict.
+- Verifier: checks that the suggestion follows from the evidence. It can only add flags. A verifier error becomes a flag.
+- Drift monitor: a conformal test martingale on the stream of model scores. On an alarm it can tighten the gate to cautious mode. Only a named human can relax it.
+- Authority: only the conformal gate or a human sets a verdict. No LLM output does.
+
+## Results
+
+Data: simulated card transactions (Sparkov style) from a public mirror of fraudTrain.csv (dazzle-nu/CIS435-CreditCardFraudDetection). The mirror was saved from a spreadsheet and holds 14 months (2019-01-01 to 2020-03-10) because it stops at the spreadsheet row limit. We kept 200 cards and split by time 70/15/15. The test period has 33,893 transactions with 145 frauds. All numbers come from one seed. Costs use assumed prices: 25 per false block and 5 per review plus the missed fraud amount.
+
+### Detector and conformal gate
+
+| Measure | Value |
+| --- | --- |
+| Rows kept (200 cards) | train 158169, calibration 33893, test 33893 |
+| Fraud rate | train 0.64 percent, calibration 0.54 percent, test 0.43 percent |
+| ROC AUC / PR AUC (test) | 0.9996 / 0.957 |
+| Calibration error (ECE, test) | 0.0002 after temperature scaling (T = 1.33) |
+| Gate coverage at alpha 0.1 | legit 0.915, fraud 0.910 |
+| Escalation rate | 8.5 percent |
+| Accuracy on auto-decided cases | 0.9995 |
+
+The near-perfect AUC shows that the simulated fraud is easy to separate. A real portfolio would be harder.
+
+### Backtest (test period)
+
+| System | Precision | Recall | Missed fraud amount | False blocks | Reviews | Cost |
+| --- | --- | --- | --- | --- | --- | --- |
+| Rules only | 0.091 | 0.441 | 23589 | 639 | 0 | 39564 |
+| Model only | 0.485 | 0.979 | 1320 | 151 | 0 | 5095 |
+| Model plus conformal gate plus human | 0.485 | 1.000 | 0 | 154 | 2878 | 18240 |
+
+The model beats the rules (McNemar p below 1e-90). The gate reaches full recall but costs more on clean data because reviews cost money. The sweep shows the gate is cheaper than a plain model threshold only when a review costs 0.25 (4993 against 5095). At a review price of 5 the model-only threshold is far cheaper (5095 against 10926 at the chosen alpha of 0.02).
+
+The agent resolved 15.8 percent of the 2878 escalated cases (about 454). On those cases it was 99.6 percent accurate against 96.5 percent for the model. Sending every escalation to a human costs 17940 and letting the agent resolve its confident cases costs 15118. The model-only threshold costs 4719.
+
+### Red team (value recall, share of fraud money caught)
+
+| Attack | Model | Gate | Gate after retrain | Gate fraud coverage | Coverage after retrain |
+| --- | --- | --- | --- | --- | --- |
+| clean | 0.983 | 0.996 | 0.997 | 0.910 | 0.938 |
+| amount shaving | 0.098 | 0.748 | 0.995 | 0.016 | 0.974 |
+| splitting | 0.549 | 0.844 | 0.981 | 0.290 | 0.841 |
+| timing spread | 0.949 | 0.993 | 0.995 | 0.814 | 0.862 |
+| category swap | 0.934 | 0.987 | 1.000 | 0.593 | 0.972 |
+| local looking | 0.983 | 0.997 | 1.000 | 0.924 | 0.986 |
+| combined | 0.720 | 0.895 | 0.999 | 0.285 | 0.940 |
+
+Attacks keep the total value in cents and only change how the fraud is spread. Amount shaving makes the model miss almost everything. The gate catches much more by escalating. Retraining on mutated fraud recovers the attack families it has seen and passed the promotion rule (clean cost 17404 against 18663 and coverage 0.938).
+
+### Generalization of the retrain (gate value recall)
+
+| Test | Attack | Original gate | Retrained gate |
+| --- | --- | --- | --- |
+| shifted attack settings | amount shaving | 0.677 | 0.975 |
+| shifted attack settings | splitting | 0.340 | 0.870 |
+| attack withheld from retraining | amount shaving | 0.748 | 0.654 |
+| attack withheld from retraining | splitting | 0.844 | 0.894 |
+| attack withheld from retraining | category swap | 0.987 | 0.988 |
+
+Retraining transfers to shifted settings of seen attacks. It does not transfer to attack types it never saw. With amount shaving withheld the retrained gate was worse than the original (0.654 against 0.748).
+
+### Drift monitor
+
+On exchangeable calibration data the monitor raised a false alarm in 2 of 100 runs (bound 1 percent). When 2 percent of later cases became fraud-like it detected the surge in 84 percent of runs after a median of about 5100 cases. At 5 percent and 10 percent it detected 100 percent of runs after about 1750 and 860 cases. On the real test stream it alarmed at case 6017 of 33893 after the fraud rate rose from 0.28 to 0.62 percent. That rise is ordinary variation in this data and not an attack. Under cautious mode the alarm would have sent 25581 automatic approvals to a person, so the monitor needs recalibration after a human acknowledges an alarm.
+
+### Limitations
+
+- The data is simulated and covers 200 cards. The test period has only 145 frauds, so every figure has wide uncertainty.
+- One seed. No confidence intervals.
+- Attacks are rule-based and keep the total value. Attacked rows are pieces of the same 145 cases.
+- The gate coverage guarantee holds for exchangeable data only. Under attack coverage fell to 0.016. Treat the gate as an escalation trigger and not as a guarantee.
+- Prices are assumptions. The reviewer is simulated with a 5 percent error rate. No real analysts were involved.
+- The agent accuracy figure covers about 454 resolved cases.
+- The Llama planner was compared with the rule planner on a synthetic fixture only (19 of 20 recommendations matched).
+- The drift monitor alarms on ordinary drift and cannot tell drift from an attack.
 
 ## Licence
 
